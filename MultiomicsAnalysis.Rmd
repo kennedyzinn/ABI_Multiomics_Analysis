@@ -1,0 +1,717 @@
+---
+title: "Mulitomics Analysis"
+author: "Kennedy Zinn"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    code_folding: hide
+---
+```{r}
+library(Seurat)
+library(hdf5r)
+
+rna_files <- list(
+  "E11" = "E11_5_filtered_gene_bc_matrices_h5.h5", 
+  "E12" = "E12_5_filtered_gene_bc_matrices_h5.h5", 
+  "E13" = "E13_5_filtered_gene_bc_matrices_h5.h5", 
+  "E14" = "E14_5_filtered_gene_bc_matrices_h5.h5", 
+  "E15" = "E15_5_filtered_gene_bc_matrices_h5.h5", 
+  "E16" = "E16_5_filtered_gene_bc_matrices_h5.h5")
+rna_list <- lapply(rna_files, Read10X_h5)
+
+E11_rna <- rna_list$E11
+E12_rna <- rna_list$E12
+E13_rna <- rna_list$E13
+E14_rna <- rna_list$E14
+E15_rna <- rna_list$E15
+E16_rna <- rna_list$E16
+
+remove(rna_list)
+```
+
+# Repeated Measures Analysis
+
+## Visualize Trajectory by Cell Type
+
+```{r, include = FALSE}
+library(SingleR)
+
+E11_seurat <- CreateSeuratObject(E11_rna, project = "E11.5")
+E12_seurat <- CreateSeuratObject(E12_rna, project = "E12.5")
+E13_seurat <- CreateSeuratObject(E13_rna, project = "E13.5")
+E14_seurat <- CreateSeuratObject(E14_rna, project = "E14.5")
+E15_seurat <- CreateSeuratObject(E15_rna, project = "E15.5")
+E16_seurat <- CreateSeuratObject(E16_rna, project = "E16.5")
+
+combined <- merge(E11_seurat, y = c(E12_seurat, E13_seurat, E14_seurat, E15_seurat, E16_seurat),
+                  add.cell.ids = c("E11.5", "E12.5", "E13.5", "E14.5", "E15.5", "E16.5"))
+remove(list = ls(pattern = "^E"))
+```
+
+```{r}
+combined$mitoPercent <- PercentageFeatureSet(combined, pattern = "^mt-")
+combined <- subset(combined, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 &
+                     nCount_RNA > 800 &
+                     mitoPercent < 5)
+```
+
+
+```{r}
+# preprocessing
+combined <- NormalizeData(combined)
+combined <- FindVariableFeatures(combined)
+combined <- ScaleData(combined)
+combined <- RunPCA(combined)
+
+# integrate
+library(harmony)
+combined <- RunHarmony(combined, group.by.vars = "orig.ident")
+combined <- RunUMAP(combined, reduction = "harmony", dims = 1:30)
+
+# clustering using KNN
+combined <- FindNeighbors(combined, reduction = "harmony", dims = 1:30)
+combined <- FindClusters(combined, resolution = 0.1)
+```
+
+```{r}
+# get annotation
+library(celldex)
+ref <- MouseRNAseqData() 
+
+# annotate
+library(SingleCellExperiment)
+combined <- JoinLayers(combined)
+sce <- as.SingleCellExperiment(combined)
+
+predictions <- SingleR(test = sce, ref = ref, labels = ref$label.fine)
+combined$cell_type <- predictions$labels
+remove(sce)
+```
+
+From these plots, we can see some clustering by cell type and time point. There is some overlap in time points and the clusters identified by PCA and UMAP, suggesting that other variables not recorded in this dataset contribute to neurogenesis. (such as neuron type/ fate)
+
+```{r}
+# clusters found by UMAP and PCA
+p <- DimPlot(combined, reduction = "umap", label = TRUE)
+p$layers[[1]]$aes_params$alpha <- 0.25
+p
+
+# by timepoint
+p <- DimPlot(combined, reduction = "umap", group.by = "orig.ident", label = F)
+p$layers[[1]]$aes_params$alpha <- 0.25
+p
+
+# by cell type
+
+p <- DimPlot(combined, reduction = "umap", group.by = "cell_type", label = F, repel = TRUE)
+p$layers[[1]]$aes_params$alpha <- 0.25
+p
+```
+
+```{r}
+# Generate distinct colors
+library(scales)
+cell_types <- unique(combined$cell_type)
+n_colors <- length(cell_types)
+my_colors <- hue_pal()(n_colors) 
+
+# Manually adjust colors for similar cell types
+# Example: if "Neurons_1" and "Neurons_2" are too similar
+names(my_colors) <- cell_types
+my_colors["Neurons"] <- "#A020F0"  # Red
+my_colors["NPCs"] <- "#377EB8"  # Blue
+my_colors["OPCs"] <- "#E41A1C"   # Green
+my_colors["aNSCs"] <- "#4DAF4A" # purple
+p <- DimPlot(combined, reduction = "umap", group.by = "cell_type", cols = my_colors, label = F, repel = TRUE)
+p$layers[[1]]$aes_params$alpha <- 0.5
+p
+```
+
+```{r, include = FALSE}
+library(dplyr)
+# add corticogenic wave labels
+combined$corticogenic_wave <- case_when(
+  combined$orig.ident %in% c("E11.5", "E12.5", "E13.5") ~ "Deep Layers (VI, V)",
+  combined$orig.ident %in% c("E14.5", "E15.5", "E16.5") ~ "Superficial Layers (II, III, IV)",
+  TRUE ~ "Other"
+)
+
+# Or using base R:
+combined$corticogenic_wave <- ifelse(
+  combined$orig.ident %in% c("E11.5", "E12.5", "E13.5"),
+  "Deep Layers (VI, V)",
+    "Superficial Layers (II, III, IV)"
+)
+```
+
+UMAP by corticogenesis, using time points by Di Bella et al.(2021) and Ohte et al. (2025)
+```{r}
+# UMAP by layer
+library(ggplot2)
+p <- DimPlot(combined, 
+        reduction = "umap", 
+        group.by = "corticogenic_wave",
+        cols = c("Deep Layers (VI, V)" = "#E41A1C",
+                 "Superficial Layers (II, III, IV)" = "#377EB8")) +
+  ggtitle("Deep vs Superficial Layers")
+p$layers[[1]]$aes_params$alpha <- 0.25
+p
+```
+
+# Temporal Analysis of Corticogenesis
+
+## Differential Analysis of Neural Progenitor Cells
+
+```{r}
+# Compare consecutive timepoints to see temporal changes
+
+# set identities to timepoints
+combined$ct.time <- paste0(combined$cell_type, combined$orig.ident)
+
+Idents(combined) <- "ct.time"
+
+contrasts_list <- list(
+  E12_vs_E11 = c("NPCsE12.5", "NPCsE11.5"),
+  E13_vs_E12 = c("NPCsE13.5", "NPCsE12.5"),
+  E14_vs_E13 = c("NPCsE14.5", "NPCsE13.5"),
+  E15_vs_E14 = c("NPCsE15.5", "NPCsE14.5"),
+  E16_vs_E15 = c("NPCsE16.5", "NPCsE15.5")
+)
+
+# Run all contrasts
+contrast_results <- lapply(names(contrasts_list), function(contrast_name) {
+  contrast <- contrasts_list[[contrast_name]]
+  
+  de_genes <- FindMarkers(combined,
+                          ident.1 = contrast[1],
+                          ident.2 = contrast[2],
+                          min.pct = .1,
+                          logfc.threshold = 0)
+  
+  de_genes$gene <- rownames(de_genes)
+  de_genes$contrast <- contrast_name
+  return(de_genes)
+})
+
+# Combine all results
+all_contrasts <- do.call(rbind, contrast_results)
+
+# Summary
+contrast_summary <- all_contrasts %>%
+  filter(p_val_adj < 0.05) %>%
+  group_by(contrast) %>%
+  summarise(
+    n_up = sum(avg_log2FC > 0),
+    n_down = sum(avg_log2FC < 0),
+    total_de = n()
+  )
+
+print(contrast_summary)
+```
+
+### Bar plot of DEG Counts 
+
+```{r}
+library(tidyr)
+# Summary of significant genes per contrast
+de_summary <- all_contrasts %>%
+  filter(p_val_adj < 0.05, abs(avg_log2FC) > 0.5) %>%
+  group_by(contrast) %>%
+  summarise(
+    Upregulated = sum(avg_log2FC > 0),
+    Downregulated = sum(avg_log2FC < 0)
+  ) %>%
+  pivot_longer(cols = c(Upregulated, Downregulated),
+               names_to = "Direction",
+               values_to = "Count")
+
+# Order contrasts chronologically
+de_summary$contrast <- factor(de_summary$contrast,
+                              levels = c("E12_vs_E11", "E13_vs_E12", "E14_vs_E13", 
+                                        "E15_vs_E14", "E16_vs_E15"))
+
+ggplot(de_summary, aes(x = contrast, y = Count, fill = Direction)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = c("Upregulated" = "#E41A1C", "Downregulated" = "#377EB8")) +
+  theme_minimal() +
+  labs(title = "Number of Differentially Expressed Genes Per Timepoint Comparison",
+       x = "Contrast",
+       y = "Number of DE Genes") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Volcano Plots
+
+```{r}
+library(patchwork)
+
+# Create volcano plot for each contrast
+names(contrast_results) <- names(contrasts_list)
+
+volcano_plots <- lapply(names(contrast_results), function(contrast_name) {
+  data <- contrast_results[[contrast_name]]
+  data$significant <- ifelse(data$p_val_adj < 0.05 & abs(data$avg_log2FC) > 0.5, 
+                             "Significant", "Not Significant")
+  
+  ggplot(data, aes(x = avg_log2FC, y = -log10(p_val_adj), color = significant)) +
+    geom_point(alpha = 0.6, size = 1) +
+    scale_color_manual(values = c("Not Significant" = "gray", "Significant" = "red")) +
+    geom_vline(xintercept = c(-0.5, 0.5), linetype = "dashed", color = "blue") +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
+    theme_minimal() +
+    labs(title = contrast_name,
+         x = "Log2 Fold Change",
+         y = "-Log10 Adjusted P-value") +
+    theme(legend.position = "bottom")
+})
+
+# Combine all volcano plots
+volcano_plots[[1]] + volcano_plots[[2]] + volcano_plots[[3]] + 
+  volcano_plots[[4]] + volcano_plots[[5]] + 
+  plot_layout(ncol = 3)
+```
+
+# Gene Profile
+```{r}
+# identify layer-specific DEGs
+all_contrasts$cort_layer <- ifelse(grepl("^E12|^E13", all_contrasts$contrast),
+                                 "deep",
+                                 "superficial")
+top30 <- all_contrasts %>% 
+  filter(p_val_adj < 0.05) %>% 
+  group_by(contrast) %>% 
+  arrange(-abs(avg_log2FC), .by_group = T) %>% 
+  slice_head(n = 30) %>% 
+  ungroup
+```
+
+```{r}
+deep_top <- top30[top30$cort_layer=="deep",] %>% 
+  arrange(-abs(avg_log2FC))
+deep_top
+```
+
+```{r}
+sup_top <- top30[top30$cort_layer=="superficial",] %>% 
+  arrange(-abs(avg_log2FC))
+sup_top
+```
+
+```{r}
+#DEGs unique to deep layer
+deep_unique <- anti_join(deep_top, sup_top, by = "gene")
+deep_unique
+```
+
+```{r}
+sup_unique <- anti_join(sup_top, deep_top, by = "gene")
+sup_unique
+```
+
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+
+plot_gene_by_time <- function(seurat_obj, gene, time_col = "orig.ident") {
+  
+  df <- FetchData(seurat_obj, vars = c(gene, time_col)) %>%
+    group_by(.data[[time_col]]) %>%
+    summarise(avg_expr = mean(.data[[gene]]), .groups = "drop")
+  
+  ggplot(df, aes_string(x = time_col, y = "avg_expr", group = 1)) +
+    geom_line(size = 1, color = "steelblue") +
+    geom_point(size = 3, color = "darkblue") +
+    labs(
+      title = paste("Average expression of", gene, "across time points"),
+      x = "Time point",
+      y = "Average expression"
+    ) +
+    theme_bw()
+}
+```
+
+Xist is exclusively expressed on the inactive X chromosome and is essential for X-inactivation (NIH). This gene was the most differentially expressed in both groups, as its expression changed dramatically from E12.5 to E14.5.
+
+```{r}
+# plot Xist expression across neurogenesis
+plot_gene_by_time(combined, "Xist")
+```
+
+Kcnn2 enables small conductance calcium-activate potassium channel activity. It is used for modulating chemical synaptic transmission and is active in glutamatergic synapses and postsynaptic membrane (NIH). This gene was a unique top DEG in early neurogensis. However, but unsurprisingly, the plot shows that expression increases throughout neurogenesis, peaking at E14.5 and leveling out after; the most significant increase in expression was detected in the early phases, from E11.5 to E12.5.
+
+```{r}
+plot_gene_by_time(combined, "Kcnn2")
+```
+
+Hbb-bs top unique DEG in the later phases of neurogenesis. Hbb-bs code for a polyeptide chain found in hemoglobin and is involved in transporting oxygen to peripheral tissues. Peaking in expression at E12.5 and dropping by E13.5, Hbb-bs expression gradually increases linearly from E13.5 to E16.5. Literature suggests that neuronal hemoglobin expression in mature neurons may play a role in neuronal epigenetics, metabolism and function (Brown et al., 2016, Richter et al., 2009).
+
+```{r}
+plot_gene_by_time(combined, "Hbb-bs")
+```
+
+# ATAC-Seq; Multiomics Integration
+
+```{r, include=FALSE}
+library(Signac)
+rm(list = ls())
+E18_atac <- Read10X_h5("E18_5_filtered_peak_bc_matrix.h5")
+E18_frag_file <- "E18_atac_fragments.tsv.tar.download/E18_atac_fragments/E18_atac_fragments.tsv.gz"
+```
+
+```{r, include = FALSE}
+# Get annotations from EnsDb
+library(EnsDb.Mmusculus.v79)
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Mmusculus.v79)
+
+# Change to UCSC style
+seqlevelsStyle(annotations) <- "UCSC"
+genome(annotations) <- "mm10"
+```
+
+```{r}
+# Same for E18.5
+E18_chromatin <- CreateChromatinAssay(
+  counts = E18_atac,
+  sep = c(":", "-"),
+  fragments = E18_frag_file,
+  genome = "mm10",
+  min.cells = 10,
+  min.features = 200,
+  annotation = annotations
+)
+
+E18_seurat <- CreateSeuratObject(
+  counts = E18_chromatin,
+  assay = "ATAC",
+  project = "E18.5_ATAC"
+)
+```
+
+```{r}
+# processing
+E18_seurat <- RunTFIDF(E18_seurat, assay = "ATAC")
+E18_seurat <- FindTopFeatures(E18_seurat, min.cutoff = 'q0')
+E18_seurat <- RunSVD(E18_seurat, assay = "ATAC")
+E18_seurat <- RunUMAP(E18_seurat, reduction = "lsi", dims = 2:30)
+E18_seurat <- FindNeighbors(E18_seurat, reduction = "lsi", dims = 2:30)
+E18_seurat <- FindClusters(E18_seurat, resolution = 0.5, algorithm = 3)
+
+# visualize
+DimPlot(E18_seurat, reduction = "umap", label = TRUE)
+```
+
+
+```{r}
+gene.activities <- GeneActivity(E18_seurat)
+
+E18_seurat[['RNA']] <- CreateAssayObject(counts = gene.activities)
+E18_seurat <- NormalizeData(object = E18_seurat,
+              assay = 'RNA',
+              normalization.method = 'LogNormalize',
+              scale.factor = median(E18_seurat$nCount_RNA))
+
+DefaultAssay(E18_seurat) <- 'RNA'
+
+FeaturePlot(E18_seurat, features = c('Pax6', 'Sox2', 'Dcx', 'Dlx1'), # canonical marker genes of progenitor neurons
+            pt.size = 0.1,
+            max.cutoff = 'q95',
+            ncol = 3)
+```
+
+```{r}
+# Load the scRNA-seq data
+E15_rna <- Read10X_h5("E15_5_filtered_gene_bc_matrices_h5.h5")
+E15_rna <- CreateSeuratObject(E15_rna, project = "E15.5")
+
+E15_rna$mitoPercent <- PercentageFeatureSet(E15_rna, pattern = "^mt-")
+E15_rna <- subset(E15_rna, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 &
+                     nCount_RNA > 800 &
+                     mitoPercent < 5)
+```
+
+
+```{r, include=FALSE}
+# preprocessing
+E15_rna <- NormalizeData(E15_rna)
+E15_rna <- FindVariableFeatures(E15_rna)
+E15_rna <- ScaleData(E15_rna)
+E15_rna <- RunPCA(E15_rna)
+E15_rna <- RunUMAP(E15_rna, dims = 1:30)
+
+# clustering using KNN
+E15_rna <- FindNeighbors(E15_rna, dims = 1:30)
+E15_rna <- FindClusters(E15_rna, resolution = 0.1)
+```
+
+```{r}
+# get annotation
+library(celldex)
+ref <- MouseRNAseqData() 
+
+# annotate
+library(SingleCellExperiment)
+E15_rna <- JoinLayers(E15_rna)
+sce <- as.SingleCellExperiment(E15_rna)
+
+predictions <- SingleR(test = sce, ref = ref, labels = ref$label.fine)
+E15_rna$cell_type <- predictions$labels
+remove(sce)
+```
+
+```{r}
+# identify anchors
+transfer.anchors <- FindTransferAnchors(reference = E15_rna,
+                    query = E18_seurat,
+                    reduction = 'pcaproject')
+
+
+predicted.labels <- TransferData(anchorset = transfer.anchors,
+             refdata = E15_rna$cell_type,
+             weight.reduction = E18_seurat[['lsi']],
+             dims = 2:30)
+head(predicted.labels)
+
+E18_seurat <- AddMetaData(object = E18_seurat, metadata = predicted.labels)
+
+
+plot1 <- DimPlot(E18_seurat, 
+        reduction = 'umap',
+        group.by = 'predicted.id',
+        label = TRUE,
+        repel = TRUE) + NoLegend() + ggtitle('scATAC-Seq')
+
+plot2 <- DimPlot(E15_rna, 
+                 reduction = 'umap',
+                 group.by = 'cell_type',
+                 label = TRUE,
+                 repel = TRUE) + NoLegend() + ggtitle('scRNA-Seq')
+plot1
+plot2
+```
+
+## Predict Chromatic Accessibility from Gene Expression
+
+```{r}
+# Impute gene expression values to ATAC cells
+genes.use <- VariableFeatures(E15_rna)
+
+# Transfer gene expression data to ATAC cells
+refdata <- GetAssayData(E15_rna, assay = "RNA", slot = "data")[genes.use, ]
+
+imputation <- TransferData(
+  anchorset = transfer.anchors,
+  refdata = refdata,
+  weight.reduction = E18_seurat[['lsi']],
+  dims = 2:30
+)
+
+# Add imputed RNA data to ATAC object
+E18_seurat[["imputed_RNA"]] <- imputation
+
+# Compare gene activity (from ATAC) vs imputed gene expression (from RNA)
+DefaultAssay(E18_seurat) <- "imputed_RNA"
+plot_imputed <- FeaturePlot(E18_seurat, 
+                            features = c('Pax6', 'Sox2', 'Dcx', 'Dlx1'),
+                            pt.size = 0.1,
+                            max.cutoff = 'q95',
+                            ncol = 2) + 
+  plot_annotation(title = 'Imputed Gene Expression from scRNA-seq')
+
+DefaultAssay(E18_seurat) <- "RNA"
+plot_activity <- FeaturePlot(E18_seurat, 
+                             features = c('Pax6', 'Sox2', 'Dcx', 'Dlx1'),
+                             pt.size = 0.1,
+                             max.cutoff = 'q95',
+                             ncol = 2) + 
+  plot_annotation(title = 'Gene Activity from scATAC-seq')
+
+# Side-by-side comparison
+plot_imputed / plot_activity
+```
+
+```{r}
+# Extract data for correlation analysis
+genes_to_test <- c('Pax6', 'Sox2', 'Dcx', 'Dlx1', 'Eomes', 'Tbr1', 'Neurod1')
+genes_to_test <- genes_to_test[genes_to_test %in% rownames(E18_seurat[["RNA"]])]
+
+correlation_results <- data.frame()
+
+for (gene in genes_to_test) {
+  # Gene activity from ATAC
+  activity <- E18_seurat[["RNA"]]@data[gene, ]
+  
+  # Imputed expression from RNA
+  expression <- E18_seurat[["imputed_RNA"]]@data[gene, ]
+  
+  # Calculate correlation
+  cor_result <- cor.test(activity, expression, method = "spearman")
+  
+  correlation_results <- rbind(correlation_results, data.frame(
+    gene = gene,
+    correlation = cor_result$estimate,
+    p_value = cor_result$p.value
+  ))
+}
+
+print("Correlation between Gene Activity (ATAC) and Imputed Expression (RNA):")
+print(correlation_results)
+
+# Visualize correlations
+library(ggplot2)
+ggplot(correlation_results, aes(x = reorder(gene, correlation), y = correlation)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(correlation, 2)), vjust = -0.5) +
+  labs(title = "Gene Expression vs Chromatin Accessibility Correlation",
+       x = "Gene", y = "Spearman Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+# Link ATAC peaks to genes based on correlation
+DefaultAssay(E18_seurat) <- "ATAC"
+
+# This requires the imputed RNA data
+library(BSgenome.Mmusculus.UCSC.mm10)
+E18_seurat <- RegionStats(
+  object = E18_seurat,
+  genome = BSgenome.Mmusculus.UCSC.mm10
+)
+
+E18_seurat <- LinkPeaks(
+  object = E18_seurat,
+  peak.assay = "ATAC",
+  expression.assay = "imputed_RNA",
+  genes.use = genes_to_test
+)
+
+# Visualize peak-gene links
+CoveragePlot(
+  object = E18_seurat,
+  region = "Pax6",
+  features = "Pax6",
+  expression.assay = "imputed_RNA",
+  extend.upstream = 50000,
+  extend.downstream = 50000
+)
+```
+
+```{r}
+# identify potential predictors of Pax6 chromatin accessibility
+
+pax6_accessibility <- E18_seurat[["RNA"]]@data["Pax6", ]
+
+# Get all genes from imputed RNA (predictor variables)
+genes_to_test <- rownames(E18_seurat[["imputed_RNA"]])
+
+cat(paste("Testing correlation of", length(genes_to_test), "genes with Pax6 chromatin accessibility...\n"))
+
+correlation_results <- data.frame()
+
+# Loop through all genes to find which predict Pax6 accessibility
+for (gene in genes_to_test) {
+  # Imputed expression of each gene from E15.5 RNA
+  expression <- E18_seurat[["imputed_RNA"]]@data[gene, ]
+  
+  # Skip genes with no variation
+  if (sd(expression) == 0) next
+  
+  # Calculate correlation
+  cor_result <- cor.test(expression, pax6_accessibility, method = "spearman")
+  
+  correlation_results <- rbind(correlation_results, data.frame(
+    gene = gene,
+    correlation = cor_result$estimate,
+    p_value = cor_result$p.value
+  ))
+}
+
+# Adjust p-values for multiple testing
+correlation_results$p_adjusted <- p.adjust(correlation_results$p_value, method = "BH")
+
+# Sort by absolute correlation strength
+correlation_results <- correlation_results[order(abs(correlation_results$correlation), decreasing = TRUE), ]
+
+# Display top results
+cat("\nTop 20 genes whose expression correlates with Pax6 chromatin accessibility:\n")
+print(head(correlation_results, 20))
+
+# Get significant genes (adjusted p-value < 0.05)
+significant_genes <- correlation_results[correlation_results$p_adjusted < 0.05, ]
+cat(paste("\nNumber of significant genes (FDR < 0.05):", nrow(significant_genes), "\n"))
+
+# Visualize top 30 correlations
+top_genes <- head(correlation_results, 30)
+
+library(ggplot2)
+
+# Separate visualization for positive and negative correlations
+pos_genes <- head(correlation_results[correlation_results$correlation > 0, ], 15)
+neg_genes <- head(correlation_results[correlation_results$correlation < 0, ], 15)
+
+p2 <- ggplot(pos_genes, aes(x = reorder(gene, correlation), y = correlation)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(correlation, 2)), hjust = -0.1, size = 3) +
+  labs(title = "Top Positive Predictors of Pax6 Accessibility",
+       x = "Gene", y = "Spearman Correlation") +
+  coord_flip() +
+  theme_minimal()
+
+p3 <- ggplot(neg_genes, aes(x = reorder(gene, correlation), y = correlation)) +
+  geom_bar(stat = "identity", fill = "coral") +
+  geom_text(aes(label = round(correlation, 2)), hjust = 1.1, size = 3) +
+  labs(title = "Top Negative Predictors of Pax6 Accessibility",
+       x = "Gene", y = "Spearman Correlation") +
+  coord_flip() +
+  theme_minimal()
+
+library(patchwork)
+p2 / p3
+
+# Scatter plots for top predictors
+top_5_genes <- head(correlation_results, 5)$gene
+
+scatter_plots <- list()
+for (i in 1:min(5, length(top_5_genes))) {
+  gene <- top_5_genes[i]
+  plot_data <- data.frame(
+    expression = E18_seurat[["imputed_RNA"]]@data[gene, ],
+    accessibility = pax6_accessibility,
+    cell_type = E18_seurat$predicted.id
+  )
+  
+  p <- ggplot(plot_data, aes(x = expression, y = accessibility, color = cell_type)) +
+    geom_point(alpha = 0.5, size = 1) +
+    geom_smooth(method = "lm", se = TRUE, color = "black", linetype = "dashed") +
+    labs(title = paste(gene, "→ Pax6 Accessibility"),
+         x = paste(gene, "Expression (E15.5)"),
+         y = "Pax6 Accessibility (E18.5)") +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  scatter_plots[[i]] <- p
+}
+
+# Arrange scatter plots
+wrap_plots(scatter_plots, ncol = 2)
+
+```
+
+
+# References
+
+Brown N, Alkhayer K, Clements R, Singhal N, Gregory R, Azzam S, Li S, Freeman E, McDonough J. Neuronal Hemoglobin Expression and Its Relevance to Multiple Sclerosis Neuropathology. J Mol Neurosci. 2016 May;59(1):1-17. doi: 10.1007/s12031-015-0711-6. Epub 2016 Jan 25. PMID: 26809286; PMCID: PMC4851882.
+
+Di Bella DJ, Habibi E, Stickels RR, Scalia G, Brown J, Yadollahpour P, Yang SM, Abbate C, Biancalani T, Macosko EZ, Chen F, Regev A, Arlotta P. Molecular logic of cellular diversification in the mouse cerebral cortex. Nature. 2021 Jul;595(7868):554-559. doi: 10.1038/s41586-021-03670-5. Epub 2021 Jun 23. Erratum in: Nature. 2021 Aug;596(7873):E11. doi: 10.1038/s41586-021-03797-5. PMID: 34163074; PMCID: PMC9006333.
+
+Ohte N, Kimura T, Sekine R, Yoshizawa S, Furusho Y, Sato D, Nishiyama C, Hanashima C. Differential neurogenic patterns underlie the formation of primary and secondary areas in the developing somatosensory cortex. Cereb Cortex. 2025 Feb 5;35(2):bhae491. doi: 10.1093/cercor/bhae491. PMID: 39756431; PMCID: PMC11795310.
+
+Richter F, Meurers BH, Zhu C, Medvedeva VP, Chesselet MF. Neurons express hemoglobin alpha- and beta-chains in rat and human brains. J Comp Neurol. 2009 Aug 10;515(5):538-47. doi: 10.1002/cne.22062. PMID: 19479992; PMCID: PMC3123135.
