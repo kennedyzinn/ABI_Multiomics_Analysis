@@ -15,7 +15,7 @@ header-includes:
   - \usepackage{pdfpages}
 ---
 
-The following is my work guided by the questions of excercise #5. The data analyzed and explored here is from DiBella et al. (2021), and is single cell RNA-seq and single cell ATAC-seq data collected from the mouse neocortex during embryonic development. Specifically, the scRNA-seq data is from time points E11.5 to E16.5 and scATAC-seq data was sampled at E18.5.
+The following is my work guided by the questions of excercise #5. The code for this analysis is available at https://github.com/kennedyzinn/ABI_Multiomics_Analysis. The data analyzed and explored here is from DiBella et al. (2021), and is single cell RNA-seq and single cell ATAC-seq data collected from the mouse neocortex during embryonic development. Specifically, the scRNA-seq data is from time points E11.5 to E16.5 and scATAC-seq data was sampled at E18.5.
 
 The Allen Brain Institute (ABI) online data portal encompasses many single cell resolution datasets, mainly ATAC-seq and RNA-seq data from the Central Nervous System (CNS) of mouse models, humans and primates. Some datasets include spatial transcriptomics data, including their transcriptomic spatial cell-type atlas, which has provided insights in characterizing cell-type specific differences in the ventral regions versus dorsal regions, and provided spatial and transcriptomic characterizations for different cell types.
 
@@ -41,14 +41,13 @@ E13_rna <- rna_list$E13
 E14_rna <- rna_list$E14
 E15_rna <- rna_list$E15
 E16_rna <- rna_list$E16
-
-remove(rna_list)
 ```
 
 # Repeated Measures Analysis
 
 ```{r, include = FALSE}
 library(SingleR)
+library(anndata)
 
 E11_seurat <- CreateSeuratObject(E11_rna, project = "E11.5")
 E12_seurat <- CreateSeuratObject(E12_rna, project = "E12.5")
@@ -406,7 +405,7 @@ Full scATAC-seq data from only E18.5 was readily available for analysis. Here, I
 
 ```{r, include=FALSE}
 library(Signac)
-rm(list = ls())
+rm(list = setdiff(ls(), "combined"))
 E18_atac <- Read10X_h5("E18_5_filtered_peak_bc_matrix.h5")
 E18_frag_file <- "E18_atac_fragments.tsv.tar.download/E18_atac_fragments/E18_atac_fragments.tsv.gz"
 ```
@@ -776,20 +775,153 @@ wrap_plots(scatter_plots, ncol = 2)
 
 This analysis demonstrates some of the transcriptional changes taking place during cortical neurogenesis, and the epigenetic landscape that follows. Future analysis could integrate the scATAC seq data and scRNA data to create a directional gene network, using packages such as CellOracle, to predict and uncover direct and indirect gene to gene relationships, and identify the unique networks contributing to the vascular and brain circuitry development that occurs parallel to layer formation, as was indicated by some of the genes identified in this analysis.
 
+# MapMyCells
+
+MapMyCells is a useful tool that can be applied to longitudinal single cell data to understand the change in cell type distributions across time. Although we previously used an automated annotation technique using the packages celldex and SingleR, MapMyCells is a useful addition to this analysis, as it predicts specific neuron types, including the neurotransmitter to which they respond and the location of the neuron.
+
+From the table we can see that most (49%) of cells following pre-processing have been mapped to immature GABA-ergic olfactory bulb neurons. 26.88% of cells are mapped to Dentate Gryus immature glutamatergic neurons. Some neurons were mapped to locations not on the forebrain. Three were mapped to the pons, 10 mapped to the midbrain, one mapped to the medulla, and one mapped to the cerebellum. These cells account for about 0.05% of the data.
+
+```{r}
+map_cells <- read.csv("merged_data_10xWholeMouseBrain(CCN20230722)_HierarchicalMapping_UTC_1763661837087/merged_data_10xWholeMouseBrain(CCN20230722)_HierarchicalMapping_UTC_1763661837087.csv", 
+                      row.names = 1,
+                      skip = 4)
+map_cells$time.point <- substr(rownames(map_cells), 1, 5)
+head(map_cells)
+```
+
+```{r}
+library(Seurat)
+# add MapMyCells annotations to Seurat object
+# match cell names 
+common_cells <- intersect(rownames(map_cells), colnames(combined))
+
+combined$predicted_class_type <- map_cells[colnames(combined), "class_name"]
+combined$prediction_class_score <- map_cells[colnames(combined), "class_bootstrapping_probability"]
+
+combined$predicted_subclass_type <- map_cells[colnames(combined), "subclass_name"]
+combined$prediction_subclass_score <- map_cells[colnames(combined), "subclass_bootstrapping_probability"]
+
+combined$predicted_supertype_type <- map_cells[colnames(combined), "supertype_name"]
+combined$prediction_supertype_score <- map_cells[colnames(combined), "supertype_bootstrapping_probability"]
+
+combined$predicted_cluster_type <- map_cells[colnames(combined), "cluster_name"]
+combined$prediction_cluster_score <- map_cells[colnames(combined), "cluster_bootstrapping_probability"]
+
+table(combined$predicted_class_type)
+```
+
+From the UMAP plot below we can see some clustering by the main predicted classes; immature oflactory bulb GABA-ergic neurons and immature dentate gyrus glutamatergic neurons. We can also observe how clustering differs by cell type at each time point. Although there are three distint GABA-ergic clusters, one cluster appears earlier in development. However, the transcriptional differences between is unclear.
+
+We can use the bootstrapping probability, which is the proportion of votes that were in favor of the assignment the cell was mapped to, as a QC metrix, to see if confidence also follows a pattern in our data. Interestingly, the clusters that have the highest bootstrapping probabilities are clusters of cells that were collected at the earliest time points. Unsuprisingly, the areas with the lowest scores are where cells with differing assignments overlap.
+
+```{r}
+# Visualize class types on UMAP
+DimPlot(combined, group.by = "predicted_cluster_type", label = F, repel = TRUE) +
+    ggplot2::ggtitle("MapMyCells Cell Type Annotations")
+```
+
+```{r}
+# Compare across samples/timepoints
+DimPlot(combined, group.by = "predicted_class_type", split.by = "orig.ident")
+```
+
+```{r}
+# Visualize prediction confidence
+FeaturePlot(combined, features = "prediction_score") +
+  ggplot2::scale_color_viridis_c() +
+  ggplot2::ggtitle("Prediction Confidence Scores")
+```
+
+Investigating the two classes to which the majority of cells were mapped provides further insight to the transcriptomic data. Below are UMAP plots of these cells by subclasses. We can see that again these cells are mostly characterized as immature neurons, which aligns with previous results and the experiment context. We can see that the two GABA-ergic clusters that formed later than the other GABA-ergic cluster differ from the first cluster by supertype. According to Velthoven et al., (2024), both of these supertypes (166 and 168), along with 171 and 172, characterize the most immature neurons in their subclass "...based on gene expression, spatial location and pseudo-temporal ordering." These results suggest that, although supertype 166 and 168 are similar, the time in which they develop may be a main discriminant.
+
+```{r}
+main_classes <- c("04 DG-IMN Glut", "05 OB-IMN GABA")
+combined_filtered <- subset(combined, 
+                            cells = colnames(combined)[combined$predicted_class_type %in% main_classes])
+```
+
+```{r}
+DimPlot(combined_filtered, group.by = "predicted_subclass_type", label = F, repel = TRUE) +
+    ggplot2::ggtitle("MapMyCells Subclass Annotations of DG Glut and OB GABA Classes")
+DimPlot(combined_filtered, group.by = "predicted_supertype_type", label = F, repel = TRUE) +
+    ggplot2::ggtitle("MapMyCells Supertype Annotations of DG Glut and OB GABA Classes")
+```
+
+We can further investigate the transcriptional differences between GABA-ergic supertypes 166 and 168. Below is a heat map identifying the difference in these supertypes. The heat map below shows the top 20 genes differentially expressed in supertypes 166 versus 168. Hes1 is associated with a greater expression in 166 compared to 168. Hes1 (average Log2FC = 6.83, FDR \< 0.0001) is critical for maintaining neural stem cells and timing, so it is unsurprising that Hes1 appears as a top DEG here (Dhanesh & Subahini, 2016). Tk1 (average Log2FC = 6.14, FDR \< 0.0001), also more expressed in the 166 supertype than 168, is involved in cell proliferation. Shtn1 (average Log2FC = 6.12, FDR \< 0.0001), a top DEG associated with decreased expression in 166 compared to 186, is involved in positive regulation of neuron migration and axon development.
+
+```{r, include = F}
+Idents(combined_filtered) <- "predicted_supertype_type"
+combined_filtered <- JoinLayers(combined_filtered)
+```
+
+```{r, include = F}
+markers_166_vs_168 <- FindMarkers(combined_filtered, 
+                              ident.1 = "0166 OB-STR-CTX Inh IMN_1",
+                              ident.2 = "0168 OB-STR-CTX Inh IMN_3",
+                              min.pct = 0.25)
+```
+
+```{r}
+# Look at top markers
+library(dplyr)
+markers_166_vs_168 <- markers_166_vs_168 %>% 
+  filter(p_val_adj < 0.05) %>% 
+  arrange(desc(abs(avg_log2FC)))
+```
+
+```{r}
+# Get top markers for each cluster
+top_markers_66 <- markers_166_vs_168 %>%
+  filter(avg_log2FC > 0, p_val_adj < 0.05) %>%
+  arrange(desc(avg_log2FC)) %>%
+  head(10)
+
+top_markers_68 <- markers_166_vs_168 %>%
+  filter(avg_log2FC < 0, p_val_adj < 0.05) %>%
+  arrange(avg_log2FC) %>%
+  head(10)
+
+all_markers <- c(rownames(top_markers_66), rownames(top_markers_68))
+
+# Subset to just these two clusters
+combined_subset <- subset(combined, 
+                          cells = colnames(combined)[combined$predicted_supertype_type %in% 
+                                                     c("0166 OB-STR-CTX Inh IMN_1", 
+                                                       "0168 OB-STR-CTX Inh IMN_3")])
+
+# Set identity
+Idents(combined_subset) <- "predicted_suptertype_type"
+
+# Make heatmap
+DoHeatmap(combined_subset, 
+          features = all_markers,
+          group.by = "predicted_supertype_type") +
+  ggplot2::scale_fill_gradientn(colors = c("blue", "white", "red")) +
+  ggplot2::labs(title = "Top Markers: 166 vs 168")
+```
+
+This analysis provides a broad overview of transcriptional and epigenomic changes underlying embryonic cortical development. Coupled with the MapMyCells tool, we are able to obtain a high-resolution view of neurogenesis and identify transcriptional differences between neurons at the temporal and functional level.
+
 # References
 
 Brown N, Alkhayer K, Clements R, Singhal N, Gregory R, Azzam S, Li S, Freeman E, McDonough J. Neuronal Hemoglobin Expression and Its Relevance to Multiple Sclerosis Neuropathology. J Mol Neurosci. 2016 May;59(1):1-17. doi: 10.1007/s12031-015-0711-6. Epub 2016 Jan 25. PMID: 26809286; PMCID: PMC4851882.
 
 Dataset: Daniela DiBella, Kwanho Kim, Paola Arlotta, Sara Sime, Vy Vuong. (2021) Single cell transcriptomic and epigenomic profile of the developing mouse cortex: Single cell 10x ATAC-seq. [Dataset] Available from: <https://assets.nemoarchive.org/dat-35p4oe3>
 
+Dhanesh SB, Subashini C, James J. Hes1: the maestro in neurogenesis. Cell Mol Life Sci. 2016 Nov;73(21):4019-42. doi: 10.1007/s00018-016-2277-z. Epub 2016 May 27. PMID: 27233500; PMCID: PMC11108451.
+
 DiBella DJ, Habibi E, Stickels RR, Scalia G, Brown J, Yadollahpour P, Yang SM, Abbate C, Biancalani T, Macosko EZ, Chen F, Regev A, Arlotta P. Molecular logic of cellular diversification in the mouse cerebral cortex. Nature. 2021 Jul;595(7868):554-559. doi: 10.1038/s41586-021-03670-5. Epub 2021 Jun 23. Erratum in: Nature. 2021 Aug;596(7873):E11. doi: 10.1038/s41586-021-03797-5. PMID: 34163074; PMCID: PMC9006333.
 
-Hu, X.-L., Chen, G., Zhang, S., Zheng, J., Wu, J., Bai, Q.-R., Wang, Y., Li, J., Wang, H., Feng, H., Li, J., Sun, X., Xia, Q., Yang, F., Hang, J., Qi, C., Phoenix, T. N., Temple, S., & Shen, Q. (2017). Persistent expression of VCAM1 in radial glial cells is required for the embryonic origin of postnatal neural stem cells. *Neuron*, *95*(2). <https://doi.org/10.1016/j.neuron.2017.06.047> 
+Hu, X.-L., Chen, G., Zhang, S., Zheng, J., Wu, J., Bai, Q.-R., Wang, Y., Li, J., Wang, H., Feng, H., Li, J., Sun, X., Xia, Q., Yang, F., Hang, J., Qi, C., Phoenix, T. N., Temple, S., & Shen, Q. (2017). Persistent expression of VCAM1 in radial glial cells is required for the embryonic origin of postnatal neural stem cells.*Neuron*,*95*(2). <https://doi.org/10.1016/j.neuron.2017.06.047>
 
 Levers TE, Edgar JM, Price DJ. The fates of cells generated at the end of neurogenesis in developing mouse cortex. J Neurobiol. 2001 Sep 15;48(4):265-77. doi: 10.1002/neu.1056. PMID: 11500840.
+
+MapMyCells (RRID:SCR_024672)
 
 Ohte N, Kimura T, Sekine R, Yoshizawa S, Furusho Y, Sato D, Nishiyama C, Hanashima C. Differential neurogenic patterns underlie the formation of primary and secondary areas in the developing somatosensory cortex. Cereb Cortex. 2025 Feb 5;35(2):bhae491. doi: 10.1093/cercor/bhae491. PMID: 39756431; PMCID: PMC11795310.
 
 Richter F, Meurers BH, Zhu C, Medvedeva VP, Chesselet MF. Neurons express hemoglobin alpha- and beta-chains in rat and human brains. J Comp Neurol. 2009 Aug 10;515(5):538-47. doi: 10.1002/cne.22062. PMID: 19479992; PMCID: PMC3123135.
 
 Sansom SN, Griffiths DS, Faedo A, Kleinjan DJ, Ruan Y, Smith J, van Heyningen V, Rubenstein JL, Livesey FJ. The level of the transcription factor Pax6 is essential for controlling the balance between neural stem cell self-renewal and neurogenesis. PLoS Genet. 2009 Jun;5(6):e1000511. doi: 10.1371/journal.pgen.1000511. Epub 2009 Jun 12. PMID: 19521500; PMCID: PMC2686252.
+
+van Velthoven CTJ, Gao Y, Kunst M, Lee C, McMillen D, Chakka AB, Casper T, Clark M, Chakrabarty R, Daniel S, Dolbeare T, Ferrer R, Gloe J, Goldy J, Guzman J, Halterman C, Ho W, Huang M, James K, Nguy B, Pham T, Ronellenfitch K, Thomas ED, Torkelson A, Pagan CM, Kruse L, Dee N, Ng L, Waters J, Smith KA, Tasic B, Yao Z, Zeng H. The transcriptomic and spatial organization of telencephalic GABAergic neuronal types. bioRxiv [Preprint]. 2024 Jun 18:2024.06.18.599583. doi: 10.1101/2024.06.18.599583. Update in: Nature. 2025 Nov;647(8088):143-156. doi: 10.1038/s41586-025-09296-1. PMID: 38948843; PMCID: PMC11212977.
