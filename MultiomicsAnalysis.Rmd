@@ -827,7 +827,7 @@ DimPlot(combined, group.by = "predicted_class_type", split.by = "orig.ident")
 
 ```{r}
 # Visualize prediction confidence
-FeaturePlot(combined, features = "prediction_score") +
+FeaturePlot(combined, features = "prediction_class_score") +
   ggplot2::scale_color_viridis_c() +
   ggplot2::ggtitle("Prediction Confidence Scores")
 ```
