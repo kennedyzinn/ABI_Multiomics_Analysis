@@ -10,8 +10,19 @@ output:
     number_sections: true
     theme: flatly
     code_folding: hide
+geometry: "margin=0.5in"
+header-includes:
+  - \usepackage{pdfpages}
 ---
-```{r}
+
+The following is my work guided by the questions of excercise #5. The data analyzed and explored here is from DiBella et al. (2021), and is single cell RNA-seq and single cell ATAC-seq data collected from the mouse neocortex during embryonic development. Specifically, the scRNA-seq data is from time points E11.5 to E16.5 and scATAC-seq data was sampled at E18.5.
+
+The Allen Brain Institute (ABI) online data portal encompasses many single cell resolution datasets, mainly ATAC-seq and RNA-seq data from the Central Nervous System (CNS) of mouse models, humans and primates. Some datasets include spatial transcriptomics data, including their transcriptomic spatial cell-type atlas, which has provided insights in characterizing cell-type specific differences in the ventral regions versus dorsal regions, and provided spatial and transcriptomic characterizations for different cell types.
+
+The ABI also provides tools, including MapMayCells, which allows researchers to use the taxonomy of cell types in the mouse brain as a reference against their own data. The ABI also has electrophysiological and morphological data which can be combined with transcriptomic data to elucidate brain circuitry and neuronal function.
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(warning = FALSE)
 library(Seurat)
 library(hdf5r)
 
@@ -36,8 +47,6 @@ remove(rna_list)
 
 # Repeated Measures Analysis
 
-## Visualize Trajectory by Cell Type
-
 ```{r, include = FALSE}
 library(SingleR)
 
@@ -53,15 +62,16 @@ combined <- merge(E11_seurat, y = c(E12_seurat, E13_seurat, E14_seurat, E15_seur
 remove(list = ls(pattern = "^E"))
 ```
 
-```{r}
+```{r, include=FALSE}
 combined$mitoPercent <- PercentageFeatureSet(combined, pattern = "^mt-")
 combined <- subset(combined, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 &
                      nCount_RNA > 800 &
                      mitoPercent < 5)
 ```
 
+Data pre-processing of the RNA data followed a standard scRNA-seq workflow. After standardizing the data, I completed clustering analysis by first employing Principal Component Analysis (PCA), followed by integrating the data from the six different time points, then running Uniform Manifold Approximation and Projection (UMAP), which further reduces the dimensionality of the data, while capturing relationships in the data that are more biologically plausible than linear relationships illustrated when using PCA alone. I finished clustering analysis by employing K-Nearest Neighbors (KNN), which separates the data into different clusters.
 
-```{r}
+```{r, include = FALSE}
 # preprocessing
 combined <- NormalizeData(combined)
 combined <- FindVariableFeatures(combined)
@@ -78,7 +88,7 @@ combined <- FindNeighbors(combined, reduction = "harmony", dims = 1:30)
 combined <- FindClusters(combined, resolution = 0.1)
 ```
 
-```{r}
+```{r, include = FALSE}
 # get annotation
 library(celldex)
 ref <- MouseRNAseqData() 
@@ -93,25 +103,31 @@ combined$cell_type <- predictions$labels
 remove(sce)
 ```
 
-From these plots, we can see some clustering by cell type and time point. There is some overlap in time points and the clusters identified by PCA and UMAP, suggesting that other variables not recorded in this dataset contribute to neurogenesis. (such as neuron type/ fate)
+The first plot represents the clusters identified by UMAP. From these plots, we can see some clustering by cell type and time point. There is some overlap in time points and the clusters identified by PCA and UMAP, suggesting that other variables not recorded in this dataset contribute to cortical development (such as predetermined neuron type or function).
 
 ```{r}
 # clusters found by UMAP and PCA
-p <- DimPlot(combined, reduction = "umap", label = TRUE)
+library(ggplot2)
+p <- DimPlot(combined, reduction = "umap", label = TRUE) +
+  ggtitle("Clusters Identified by UMAP")
 p$layers[[1]]$aes_params$alpha <- 0.25
 p
 
 # by timepoint
-p <- DimPlot(combined, reduction = "umap", group.by = "orig.ident", label = F)
+p <- DimPlot(combined, reduction = "umap", group.by = "orig.ident", label = F) +
+  ggtitle("Clustering by Time Point")
 p$layers[[1]]$aes_params$alpha <- 0.25
 p
 
 # by cell type
 
-p <- DimPlot(combined, reduction = "umap", group.by = "cell_type", label = F, repel = TRUE)
+p <- DimPlot(combined, reduction = "umap", group.by = "cell_type", label = F, repel = TRUE) +
+  ggtitle("Clustering by Cell Type")
 p$layers[[1]]$aes_params$alpha <- 0.25
 p
 ```
+
+Here we can see with certainty that the large majority of cell types is neurons, and the large majority of neurons are neural progenitor cells (NPCs).
 
 ```{r}
 # Generate distinct colors
@@ -149,10 +165,10 @@ combined$corticogenic_wave <- ifelse(
 )
 ```
 
-UMAP by corticogenesis, using time points by Di Bella et al.(2021) and Ohte et al. (2025)
+Cortical neurogenesis is a process during embryonic development, from E11 to E17, in which neural stem cells generate neurons that then migrate to form the neocortex (Levers et al., 2001). This process takes place in an 'inside-out' fashion, where the deepest layers of the cortex are formed first, and the most superficial layers are formed last. Below is a clustering analysis this time by using the canonical times the deep layer and superficial layers are formed (Di Bella et al., 2021; Ohte et al. (2025). We can see some distinguishable separations between the formation of the deep layers (V and VI) and the superficial layers (II, III, IV). Although not specified, separate datasets found in this lab's directory, labeled C and R at time points E10.5, suggest that this data here might not encompass the Cajal-Retzius cells that are formed early and form the first layer. However, given some overlap of the clusters, we cannot be certain.
+
 ```{r}
 # UMAP by layer
-library(ggplot2)
 p <- DimPlot(combined, 
         reduction = "umap", 
         group.by = "corticogenic_wave",
@@ -167,7 +183,13 @@ p
 
 ## Differential Analysis of Neural Progenitor Cells
 
-```{r}
+In further analysis, I aimed to explore the change of the NPCs across cortical neurogenesis, given that the available data encompasses almost the entire time period in which it is believed to take place. Differential analysis employs a contrast matrix on a simple model;
+
+gene expression~i~ = time point~j~,
+
+Which aims to predict the gene expression of gene (i) by the day (time point (j), where j = E11.5...E16.5) the NPC was sampled. By employing a contrast matrix, I compare gene expression from each day to the day prior, instead of only comparing each day to E11.5. This allows for a more granular illustration of gene expression changes across cortical development, and allows for comparisons across 'deep layer days' and 'superficial layer days'.
+
+```{r, inlcude = FALSE}
 # Compare consecutive timepoints to see temporal changes
 
 # set identities to timepoints
@@ -210,14 +232,23 @@ contrast_summary <- all_contrasts %>%
     n_down = sum(avg_log2FC < 0),
     total_de = n()
   )
+```
 
+```{r}
 print(contrast_summary)
 ```
 
-### Bar plot of DEG Counts 
+### Visualization of DEG Density
+
+Below represents the density of differentially expressed genes (DEGs) compared to the day prior, using bar graphs and volcano plots. Dramatic changes occur from E12.5 to E14.5 in an alternating pattern between sudden increased expression of many genes to a sudden repression of gene expression. However, these graphs alone cannot determine if it is the same genes that undergo sudden expression and subsequent suppression. Further analysis could determine the proportion of shared expression changes, which could suggest if certain brief but important neurogenic processes have been captured by this dataset.
+
+#### Bar plot of DEG Counts
 
 ```{r}
 library(tidyr)
+```
+
+```{r}
 # Summary of significant genes per contrast
 de_summary <- all_contrasts %>%
   filter(p_val_adj < 0.05, abs(avg_log2FC) > 0.5) %>%
@@ -245,7 +276,7 @@ ggplot(de_summary, aes(x = contrast, y = Count, fill = Direction)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
-### Volcano Plots
+#### Volcano Plots
 
 ```{r}
 library(patchwork)
@@ -277,7 +308,12 @@ volcano_plots[[1]] + volcano_plots[[2]] + volcano_plots[[3]] +
 ```
 
 # Gene Profile
-```{r}
+
+Here I identify genes differentially expressed during early neurogenesis (E11.5 to E13.5) and late neurogenesis (E14.5 to E16.5); 'deep layer days' and 'superficial layer days', respectively. Further analysis could identify unique gene markers for each time point, from E12.5 to E16.5 in a similar fashion as done below.
+
+First, I filtered the results from differential analysis for DEGs that are significant following multiple testing correction (FDR \< 0.05). For each time point, I chose the 30 DEGs with the greatest absolute log2 fold change.
+
+```{r, include=FALSE}
 # identify layer-specific DEGs
 all_contrasts$cort_layer <- ifelse(grepl("^E12|^E13", all_contrasts$contrast),
                                  "deep",
@@ -289,6 +325,12 @@ top30 <- all_contrasts %>%
   slice_head(n = 30) %>% 
   ungroup
 ```
+
+From there, I organized the data into deep layer time points (E11.5 to E13.5) and superficial layer time points (E14.5 to E16.5), ordered by absolute log2 fold change. Interestingly, Xist had the largest change in expression in both groups, largely because expression dipped on E13.5 and increased dramatically on E14.5.
+
+Hoping to find DEGs specific to each groups, I narrowed the results by only genes uniquely found as a top DEG in the deep layer group, and similarly for the superficial layer group.
+
+Below are the profiles of a select few genes from the list. Xist, which was the top DEG in both groups, Kcnn2, which is a top gene essential for action potentials, whose change in expression is unique to early neurogenesis, and Hbb-bs, a hemoglobin gene determined to change expression unique to late neurogenesis.
 
 ```{r}
 deep_top <- top30[top30$cort_layer=="deep",] %>% 
@@ -313,11 +355,9 @@ sup_unique <- anti_join(sup_top, deep_top, by = "gene")
 sup_unique
 ```
 
-
 ```{r}
 
 library(dplyr)
-library(ggplot2)
 
 plot_gene_by_time <- function(seurat_obj, gene, time_col = "orig.ident") {
   
@@ -350,13 +390,19 @@ Kcnn2 enables small conductance calcium-activate potassium channel activity. It 
 plot_gene_by_time(combined, "Kcnn2")
 ```
 
-Hbb-bs top unique DEG in the later phases of neurogenesis. Hbb-bs code for a polyeptide chain found in hemoglobin and is involved in transporting oxygen to peripheral tissues. Peaking in expression at E12.5 and dropping by E13.5, Hbb-bs expression gradually increases linearly from E13.5 to E16.5. Literature suggests that neuronal hemoglobin expression in mature neurons may play a role in neuronal epigenetics, metabolism and function (Brown et al., 2016, Richter et al., 2009).
+Hbb-bs is a top unique DEG in the later phases of neurogenesis. Hbb-bs code for a polyeptide chain found in hemoglobin and is involved in transporting oxygen to peripheral tissues. Peaking in expression at E12.5 and dropping by E13.5, Hbb-bs expression gradually increases linearly from E13.5 to E16.5. Literature suggests that neuronal hemoglobin expression in mature neurons may play a role in neuronal epigenetics, metabolism and function (Brown et al., 2016, Richter et al., 2009).
+
+Although expression peaks at E12.5, the bar graphs and volcano plots show that many genes increased expression dramatically; it may be that the increased expression of Hbb-bs on E12.5 was not dramatic relative to other genes at that time point.
 
 ```{r}
 plot_gene_by_time(combined, "Hbb-bs")
 ```
 
+The analysis of the scRNA-seq data here is preliminary at best; further analysis could include identifying markers unique to each time point, exploring which genes are continually changing throughout cortical neurogenesis (ie shared DEGs across time points), Gene Set Analysis (GSEA) to summarize the DEGs identified here, and a Weighted Gene Co-Expression Network Analysis (WGCNA), to identify the gene networks involved here and identify genes that act as key drivers during development.
+
 # ATAC-Seq; Multiomics Integration
+
+Full scATAC-seq data from only E18.5 was readily available for analysis. Here, I compare the open chromatin regions at E18.5 to gene expression at E16.5, with the goal of identifying genes which may regulate chromatin accessibility of marker genes on the genome. Considering the temporal difference in the datasets, associated chromatin regions are considered to be latent responses associated with gene expression.
 
 ```{r, include=FALSE}
 library(Signac)
@@ -375,7 +421,7 @@ seqlevelsStyle(annotations) <- "UCSC"
 genome(annotations) <- "mm10"
 ```
 
-```{r}
+```{r, include=FALSE}
 # Same for E18.5
 E18_chromatin <- CreateChromatinAssay(
   counts = E18_atac,
@@ -394,21 +440,24 @@ E18_seurat <- CreateSeuratObject(
 )
 ```
 
-```{r}
+```{r, include=FALSE}
 # processing
 E18_seurat <- RunTFIDF(E18_seurat, assay = "ATAC")
 E18_seurat <- FindTopFeatures(E18_seurat, min.cutoff = 'q0')
 E18_seurat <- RunSVD(E18_seurat, assay = "ATAC")
 E18_seurat <- RunUMAP(E18_seurat, reduction = "lsi", dims = 2:30)
 E18_seurat <- FindNeighbors(E18_seurat, reduction = "lsi", dims = 2:30)
-E18_seurat <- FindClusters(E18_seurat, resolution = 0.5, algorithm = 3)
-
-# visualize
-DimPlot(E18_seurat, reduction = "umap", label = TRUE)
+E18_seurat <- FindClusters(E18_seurat, resolution = 0.1, algorithm = 3)
 ```
 
+Pre-processing of single cell ATAC-seq data followed a standard workflow. After standardizing, I completed cluster analysis using UMAP and KNN.
 
 ```{r}
+# visualize
+DimPlot(E18_seurat, reduction = "umap", label = F) + labs(title = "Clusters of ATAC-seq Data")
+```
+
+```{r, include=FALSE}
 gene.activities <- GeneActivity(E18_seurat)
 
 E18_seurat[['RNA']] <- CreateAssayObject(counts = gene.activities)
@@ -418,62 +467,65 @@ E18_seurat <- NormalizeData(object = E18_seurat,
               scale.factor = median(E18_seurat$nCount_RNA))
 
 DefaultAssay(E18_seurat) <- 'RNA'
-
-FeaturePlot(E18_seurat, features = c('Pax6', 'Sox2', 'Dcx', 'Dlx1'), # canonical marker genes of progenitor neurons
-            pt.size = 0.1,
-            max.cutoff = 'q95',
-            ncol = 3)
 ```
 
-```{r}
-# Load the scRNA-seq data
-E15_rna <- Read10X_h5("E15_5_filtered_gene_bc_matrices_h5.h5")
-E15_rna <- CreateSeuratObject(E15_rna, project = "E15.5")
+Below are plots of the data by genes considered to be canonical markers of E18.5, and their predicted gene expression given the accessibility of associated chromatin regions. Pax6 and Dcx display a particular enrichment of chromatin accessibility.
 
-E15_rna$mitoPercent <- PercentageFeatureSet(E15_rna, pattern = "^mt-")
-E15_rna <- subset(E15_rna, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 &
+```{r}
+FeaturePlot(E18_seurat, features = c('Pax6', 'Sox2', 'Nes', 'Dcx'), # canonical marker genes of progenitor neurons
+            pt.size = 0.1,
+            max.cutoff = 'q95',
+            ncol = 2)
+```
+
+```{r, include=FALSE}
+# Load the scRNA-seq data
+E16_rna <- Read10X_h5("E16_5_filtered_gene_bc_matrices_h5.h5")
+E16_rna <- CreateSeuratObject(E16_rna, project = "E16.5")
+
+E16_rna$mitoPercent <- PercentageFeatureSet(E16_rna, pattern = "^mt-")
+E16_rna <- subset(E16_rna, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 &
                      nCount_RNA > 800 &
                      mitoPercent < 5)
 ```
 
-
 ```{r, include=FALSE}
 # preprocessing
-E15_rna <- NormalizeData(E15_rna)
-E15_rna <- FindVariableFeatures(E15_rna)
-E15_rna <- ScaleData(E15_rna)
-E15_rna <- RunPCA(E15_rna)
-E15_rna <- RunUMAP(E15_rna, dims = 1:30)
+E16_rna <- NormalizeData(E16_rna)
+E16_rna <- FindVariableFeatures(E16_rna)
+E16_rna <- ScaleData(E16_rna)
+E16_rna <- RunPCA(E16_rna)
+E16_rna <- RunUMAP(E16_rna, dims = 1:30)
 
 # clustering using KNN
-E15_rna <- FindNeighbors(E15_rna, dims = 1:30)
-E15_rna <- FindClusters(E15_rna, resolution = 0.1)
+E16_rna <- FindNeighbors(E16_rna, dims = 1:30)
+E16_rna <- FindClusters(E16_rna, resolution = 0.1)
 ```
 
-```{r}
+```{r, inlcude=FALSE}
 # get annotation
 library(celldex)
 ref <- MouseRNAseqData() 
 
 # annotate
 library(SingleCellExperiment)
-E15_rna <- JoinLayers(E15_rna)
-sce <- as.SingleCellExperiment(E15_rna)
+E16_rna <- JoinLayers(E16_rna)
+sce <- as.SingleCellExperiment(E16_rna)
 
 predictions <- SingleR(test = sce, ref = ref, labels = ref$label.fine)
-E15_rna$cell_type <- predictions$labels
+E16_rna$cell_type <- predictions$labels
 remove(sce)
 ```
 
-```{r}
+```{r, include=FALSE}
 # identify anchors
-transfer.anchors <- FindTransferAnchors(reference = E15_rna,
+transfer.anchors <- FindTransferAnchors(reference = E16_rna,
                     query = E18_seurat,
                     reduction = 'pcaproject')
 
 
 predicted.labels <- TransferData(anchorset = transfer.anchors,
-             refdata = E15_rna$cell_type,
+             refdata = E16_rna$cell_type,
              weight.reduction = E18_seurat[['lsi']],
              dims = 2:30)
 head(predicted.labels)
@@ -484,26 +536,33 @@ E18_seurat <- AddMetaData(object = E18_seurat, metadata = predicted.labels)
 plot1 <- DimPlot(E18_seurat, 
         reduction = 'umap',
         group.by = 'predicted.id',
-        label = TRUE,
-        repel = TRUE) + NoLegend() + ggtitle('scATAC-Seq')
+        label = F,
+        repel = TRUE) + ggtitle('scATAC-Seq at E18.5 by Cell Type')
 
-plot2 <- DimPlot(E15_rna, 
+plot2 <- DimPlot(E16_rna, 
                  reduction = 'umap',
                  group.by = 'cell_type',
-                 label = TRUE,
-                 repel = TRUE) + NoLegend() + ggtitle('scRNA-Seq')
+                 label = F,
+                 repel = TRUE) + ggtitle('scRNA-Seq at E16.5')
+```
+
+From the UMAPs of the RNA and ATAC-seq data, we can see that, as expected, the vast majority of cells are NPCs. Analysis will therefore focus on this cell type.
+
+```{r}
 plot1
 plot2
 ```
 
-## Predict Chromatic Accessibility from Gene Expression
+## Predict Latent Chromatic Accessibility from Gene Expression
 
-```{r}
+In order to conduct this multiomics analysis, the processed datasets were integrated using the Seurat package, which was also used throughout data processing and analysis of the longitudinal RNA-seq data.
+
+```{r, include=FALSE}
 # Impute gene expression values to ATAC cells
-genes.use <- VariableFeatures(E15_rna)
+genes.use <- VariableFeatures(E16_rna)
 
 # Transfer gene expression data to ATAC cells
-refdata <- GetAssayData(E15_rna, assay = "RNA", slot = "data")[genes.use, ]
+refdata <- GetAssayData(E16_rna, assay = "RNA", slot = "data")[genes.use, ]
 
 imputation <- TransferData(
   anchorset = transfer.anchors,
@@ -514,11 +573,15 @@ imputation <- TransferData(
 
 # Add imputed RNA data to ATAC object
 E18_seurat[["imputed_RNA"]] <- imputation
+```
 
+The plots below compare gene expression levels imputed from E16.5 RNA to E18.5 chromatin data. Given these preliminary plots, correlations between gene expression and later open chromatin regions seem weak at best. This assertion is supported by the bar graph below, which illustrates the correlation for each gene's expression at E16.5 and chromatin accessibility at E18.5. However, there may be other genes in this dataset that may be more strongly associated with latent chromatin accessibility.
+
+```{r}
 # Compare gene activity (from ATAC) vs imputed gene expression (from RNA)
 DefaultAssay(E18_seurat) <- "imputed_RNA"
 plot_imputed <- FeaturePlot(E18_seurat, 
-                            features = c('Pax6', 'Sox2', 'Dcx', 'Dlx1'),
+                            features = c('Pax6', 'Sox2', 'Nes', 'Dcx'),
                             pt.size = 0.1,
                             max.cutoff = 'q95',
                             ncol = 2) + 
@@ -533,7 +596,7 @@ plot_activity <- FeaturePlot(E18_seurat,
   plot_annotation(title = 'Gene Activity from scATAC-seq')
 
 # Side-by-side comparison
-plot_imputed / plot_activity
+plot_imputed | plot_activity
 ```
 
 ```{r}
@@ -575,6 +638,8 @@ ggplot(correlation_results, aes(x = reorder(gene, correlation), y = correlation)
 
 ```
 
+By integrating the two datasets, we can observe correlations between open chromatin regions and gene expression. I focus on Pax6, which, from previous plots, displayed enriched open chromatin regions and moderate to high gene expression. The plot below represents the different peaks of each cluster, and shows links between open chromatin regions and Pax6 expression. There are two links between the promoter region of Pax6 and Elp4. These genes are physically close together, and critically, Elp4 is known to contain elements which regulate Pax6 expression (NIH).
+
 ```{r}
 # Link ATAC peaks to genes based on correlation
 DefaultAssay(E18_seurat) <- "ATAC"
@@ -604,6 +669,12 @@ CoveragePlot(
 )
 ```
 
+Finally, to elucidate any other potential Pax6 regulators, I conducted Spearman's correlation testing, testing the correlation between Pax6 gene activity at E18.5 and all other genes whose expression was recorded at E16.5. Testing did not detect any moderate or strong correlations (\|rho\| \> 0.5). The strongest statistically significant correlations (\|rho\| = [0.3, 0.32], FDR \> 0.05), did yeild some genes with established or indirect relationships with Pax6.
+
+Cdk2 (rho = 0.32, FDR \< 0.0001) and other cell cycle regulators have been shown to be dependent on Pax6 for expression (Sansom et al., 2009). However, expression of Cdk2 here precedes Pax6 chromatin accessibility, which is not representative of Pax6 regulation on Cdk2.
+
+Vcam1 (rho = 0.32, FDR \< 0.0001) is known to be co-expressed with Pax6 in radial glial cells in the developing cortex, and are considered markers for Radial Glial Cells (RGCs) (Hu et al., 2017).
+
 ```{r}
 # identify potential predictors of Pax6 chromatin accessibility
 
@@ -612,13 +683,11 @@ pax6_accessibility <- E18_seurat[["RNA"]]@data["Pax6", ]
 # Get all genes from imputed RNA (predictor variables)
 genes_to_test <- rownames(E18_seurat[["imputed_RNA"]])
 
-cat(paste("Testing correlation of", length(genes_to_test), "genes with Pax6 chromatin accessibility...\n"))
-
 correlation_results <- data.frame()
 
 # Loop through all genes to find which predict Pax6 accessibility
 for (gene in genes_to_test) {
-  # Imputed expression of each gene from E15.5 RNA
+  # Imputed expression of each gene from E16.5 RNA
   expression <- E18_seurat[["imputed_RNA"]]@data[gene, ]
   
   # Skip genes with no variation
@@ -692,7 +761,7 @@ for (i in 1:min(5, length(top_5_genes))) {
     geom_point(alpha = 0.5, size = 1) +
     geom_smooth(method = "lm", se = TRUE, color = "black", linetype = "dashed") +
     labs(title = paste(gene, "→ Pax6 Accessibility"),
-         x = paste(gene, "Expression (E15.5)"),
+         x = paste(gene, "Expression (E16.5)"),
          y = "Pax6 Accessibility (E18.5)") +
     theme_minimal() +
     theme(legend.position = "none")
@@ -705,13 +774,22 @@ wrap_plots(scatter_plots, ncol = 2)
 
 ```
 
+This analysis demonstrates some of the transcriptional changes taking place during cortical neurogenesis, and the epigenetic landscape that follows. Future analysis could integrate the scATAC seq data and scRNA data to create a directional gene network, using packages such as CellOracle, to predict and uncover direct and indirect gene to gene relationships, and identify the unique networks contributing to the vascular and brain circuitry development that occurs parallel to layer formation, as was indicated by some of the genes identified in this analysis.
 
 # References
 
 Brown N, Alkhayer K, Clements R, Singhal N, Gregory R, Azzam S, Li S, Freeman E, McDonough J. Neuronal Hemoglobin Expression and Its Relevance to Multiple Sclerosis Neuropathology. J Mol Neurosci. 2016 May;59(1):1-17. doi: 10.1007/s12031-015-0711-6. Epub 2016 Jan 25. PMID: 26809286; PMCID: PMC4851882.
 
-Di Bella DJ, Habibi E, Stickels RR, Scalia G, Brown J, Yadollahpour P, Yang SM, Abbate C, Biancalani T, Macosko EZ, Chen F, Regev A, Arlotta P. Molecular logic of cellular diversification in the mouse cerebral cortex. Nature. 2021 Jul;595(7868):554-559. doi: 10.1038/s41586-021-03670-5. Epub 2021 Jun 23. Erratum in: Nature. 2021 Aug;596(7873):E11. doi: 10.1038/s41586-021-03797-5. PMID: 34163074; PMCID: PMC9006333.
+Dataset: Daniela DiBella, Kwanho Kim, Paola Arlotta, Sara Sime, Vy Vuong. (2021) Single cell transcriptomic and epigenomic profile of the developing mouse cortex: Single cell 10x ATAC-seq. [Dataset] Available from: <https://assets.nemoarchive.org/dat-35p4oe3>
+
+DiBella DJ, Habibi E, Stickels RR, Scalia G, Brown J, Yadollahpour P, Yang SM, Abbate C, Biancalani T, Macosko EZ, Chen F, Regev A, Arlotta P. Molecular logic of cellular diversification in the mouse cerebral cortex. Nature. 2021 Jul;595(7868):554-559. doi: 10.1038/s41586-021-03670-5. Epub 2021 Jun 23. Erratum in: Nature. 2021 Aug;596(7873):E11. doi: 10.1038/s41586-021-03797-5. PMID: 34163074; PMCID: PMC9006333.
+
+Hu, X.-L., Chen, G., Zhang, S., Zheng, J., Wu, J., Bai, Q.-R., Wang, Y., Li, J., Wang, H., Feng, H., Li, J., Sun, X., Xia, Q., Yang, F., Hang, J., Qi, C., Phoenix, T. N., Temple, S., & Shen, Q. (2017). Persistent expression of VCAM1 in radial glial cells is required for the embryonic origin of postnatal neural stem cells. *Neuron*, *95*(2). <https://doi.org/10.1016/j.neuron.2017.06.047> 
+
+Levers TE, Edgar JM, Price DJ. The fates of cells generated at the end of neurogenesis in developing mouse cortex. J Neurobiol. 2001 Sep 15;48(4):265-77. doi: 10.1002/neu.1056. PMID: 11500840.
 
 Ohte N, Kimura T, Sekine R, Yoshizawa S, Furusho Y, Sato D, Nishiyama C, Hanashima C. Differential neurogenic patterns underlie the formation of primary and secondary areas in the developing somatosensory cortex. Cereb Cortex. 2025 Feb 5;35(2):bhae491. doi: 10.1093/cercor/bhae491. PMID: 39756431; PMCID: PMC11795310.
 
 Richter F, Meurers BH, Zhu C, Medvedeva VP, Chesselet MF. Neurons express hemoglobin alpha- and beta-chains in rat and human brains. J Comp Neurol. 2009 Aug 10;515(5):538-47. doi: 10.1002/cne.22062. PMID: 19479992; PMCID: PMC3123135.
+
+Sansom SN, Griffiths DS, Faedo A, Kleinjan DJ, Ruan Y, Smith J, van Heyningen V, Rubenstein JL, Livesey FJ. The level of the transcription factor Pax6 is essential for controlling the balance between neural stem cell self-renewal and neurogenesis. PLoS Genet. 2009 Jun;5(6):e1000511. doi: 10.1371/journal.pgen.1000511. Epub 2009 Jun 12. PMID: 19521500; PMCID: PMC2686252.
