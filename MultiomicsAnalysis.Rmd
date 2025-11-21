@@ -10,7 +10,7 @@ output:
     number_sections: true
     theme: flatly
     code_folding: hide
-geometry: "margin=0.5in"
+geometry: "margin=0.2in"
 header-includes:
   - \usepackage{pdfpages}
 ---
@@ -779,14 +779,13 @@ This analysis demonstrates some of the transcriptional changes taking place duri
 
 MapMyCells is a useful tool that can be applied to longitudinal single cell data to understand the change in cell type distributions across time. Although we previously used an automated annotation technique using the packages celldex and SingleR, MapMyCells is a useful addition to this analysis, as it predicts specific neuron types, including the neurotransmitter to which they respond and the location of the neuron.
 
-From the table we can see that most (49%) of cells following pre-processing have been mapped to immature GABA-ergic olfactory bulb neurons. 26.88% of cells are mapped to Dentate Gryus immature glutamatergic neurons. Some neurons were mapped to locations not on the forebrain. Three were mapped to the pons, 10 mapped to the midbrain, one mapped to the medulla, and one mapped to the cerebellum. These cells account for about 0.05% of the data.
+Most (49%) of cells following pre-processing have been mapped to immature GABA-ergic olfactory bulb neurons. 26.88% of cells are mapped to Dentate Gryus immature glutamatergic neurons. Some neurons were mapped to locations not on the forebrain. Three were mapped to the pons, 10 mapped to the midbrain, one mapped to the medulla, and one mapped to the cerebellum. These cells account for about 0.05% of the data.
 
 ```{r}
 map_cells <- read.csv("merged_data_10xWholeMouseBrain(CCN20230722)_HierarchicalMapping_UTC_1763661837087/merged_data_10xWholeMouseBrain(CCN20230722)_HierarchicalMapping_UTC_1763661837087.csv", 
                       row.names = 1,
                       skip = 4)
 map_cells$time.point <- substr(rownames(map_cells), 1, 5)
-head(map_cells)
 ```
 
 ```{r}
@@ -806,17 +805,15 @@ combined$prediction_supertype_score <- map_cells[colnames(combined), "supertype_
 
 combined$predicted_cluster_type <- map_cells[colnames(combined), "cluster_name"]
 combined$prediction_cluster_score <- map_cells[colnames(combined), "cluster_bootstrapping_probability"]
-
-table(combined$predicted_class_type)
 ```
 
-From the UMAP plot below we can see some clustering by the main predicted classes; immature oflactory bulb GABA-ergic neurons and immature dentate gyrus glutamatergic neurons. We can also observe how clustering differs by cell type at each time point. Although there are three distint GABA-ergic clusters, one cluster appears earlier in development. However, the transcriptional differences between is unclear.
+From the UMAP plot below we can see some clustering by the main predicted classes; immature olfactory bulb GABA-ergic neurons and immature dentate gyrus glutamatergic neurons. We can also observe how clustering differs by cell type at each time point. Although there are three distinct GABA-ergic clusters, one cluster appears earlier in development. However, the transcriptional differences between is unclear.
 
-We can use the bootstrapping probability, which is the proportion of votes that were in favor of the assignment the cell was mapped to, as a QC metrix, to see if confidence also follows a pattern in our data. Interestingly, the clusters that have the highest bootstrapping probabilities are clusters of cells that were collected at the earliest time points. Unsuprisingly, the areas with the lowest scores are where cells with differing assignments overlap.
+We can use the bootstrapping probability, which is the proportion of votes that were in favor of the assignment the cell was mapped to, as a QC metric, to see if confidence also follows a pattern in our data. Interestingly, the clusters that have the highest bootstrapping probabilities are clusters of cells that were collected at the earliest time points. Unsurprisingly, the areas with the lowest scores are where cells with differing assignments overlap.
 
 ```{r}
 # Visualize class types on UMAP
-DimPlot(combined, group.by = "predicted_cluster_type", label = F, repel = TRUE) +
+DimPlot(combined, group.by = "predicted_class_type", label = F, repel = TRUE) +
     ggplot2::ggtitle("MapMyCells Cell Type Annotations")
 ```
 
@@ -865,19 +862,19 @@ markers_166_vs_168 <- FindMarkers(combined_filtered,
 # Look at top markers
 library(dplyr)
 markers_166_vs_168 <- markers_166_vs_168 %>% 
-  filter(p_val_adj < 0.05) %>% 
+  dplyr::filter(p_val_adj < 0.05) %>% 
   arrange(desc(abs(avg_log2FC)))
 ```
 
 ```{r}
 # Get top markers for each cluster
 top_markers_66 <- markers_166_vs_168 %>%
-  filter(avg_log2FC > 0, p_val_adj < 0.05) %>%
+  dplyr::filter(avg_log2FC > 0, p_val_adj < 0.05) %>%
   arrange(desc(avg_log2FC)) %>%
   head(10)
 
 top_markers_68 <- markers_166_vs_168 %>%
-  filter(avg_log2FC < 0, p_val_adj < 0.05) %>%
+  dplyr::filter(avg_log2FC < 0, p_val_adj < 0.05) %>%
   arrange(avg_log2FC) %>%
   head(10)
 
