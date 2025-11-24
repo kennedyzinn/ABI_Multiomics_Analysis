@@ -588,7 +588,7 @@ plot_imputed <- FeaturePlot(E18_seurat,
 
 DefaultAssay(E18_seurat) <- "RNA"
 plot_activity <- FeaturePlot(E18_seurat, 
-                             features = c('Pax6', 'Sox2', 'Dcx', 'Dlx1'),
+                             features = c('Pax6', 'Sox2', 'Nes', 'Dcx'),
                              pt.size = 0.1,
                              max.cutoff = 'q95',
                              ncol = 2) + 
@@ -600,7 +600,7 @@ plot_imputed | plot_activity
 
 ```{r}
 # Extract data for correlation analysis
-genes_to_test <- c('Pax6', 'Sox2', 'Dcx', 'Dlx1', 'Eomes', 'Tbr1', 'Neurod1')
+genes_to_test <- c('Pax6', 'Sox2', 'Nes', 'Dcx')
 genes_to_test <- genes_to_test[genes_to_test %in% rownames(E18_seurat[["RNA"]])]
 
 correlation_results <- data.frame()
