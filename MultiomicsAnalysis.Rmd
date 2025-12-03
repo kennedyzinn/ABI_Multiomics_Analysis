@@ -306,7 +306,7 @@ volcano_plots[[1]] + volcano_plots[[2]] + volcano_plots[[3]] +
   plot_layout(ncol = 3)
 ```
 
-# Gene Profile
+# Gene Profile with UMAPs
 
 Here I identify genes differentially expressed during early neurogenesis (E11.5 to E13.5) and late neurogenesis (E14.5 to E16.5); 'deep layer days' and 'superficial layer days', respectively. Further analysis could identify unique gene markers for each time point, from E12.5 to E16.5 in a similar fashion as done below.
 
@@ -458,6 +458,8 @@ The analysis of the scRNA-seq data here is preliminary at best; further analysis
 
 Full scATAC-seq data from only E18.5 was readily available for analysis. Here, I compare the open chromatin regions at E18.5 to gene expression at E16.5, with the goal of identifying genes which may regulate chromatin accessibility of marker genes on the genome. Considering the temporal difference in the datasets, associated chromatin regions are considered to be latent responses associated with gene expression.
 
+## Raw Data Description
+
 The raw data of the ATAC-seq data consists of two files; the peaks file and the fragments file. The fragment file is a matrix of five columns; the first three columns are the genomic locations (chromosome, start position and end position), the fourth column is the cell ID and the fifth column is the total number of reads from that cell that are associated with that fragment. The peaks file is a sparse feature by cell matrix where the rows are peaks and the columns are the cells. Each element within this sparse matrix is a  that cell within that locus.
 
 ```{r, include=FALSE}
@@ -513,7 +515,9 @@ Pre-processing of single cell ATAC-seq data followed a standard workflow. After 
 DimPlot(E18_seurat, reduction = "umap", label = F) + labs(title = "Clusters of ATAC-seq Data")
 ```
 
-Gene activity scores are calculated using the GeneActivity() function from the Signac package. This score represents the counts per cell in the gene body and promoter regions. Assuming that open chromatin implies transcription, this score imputes gene expression from the accessibility of the gene's regulatory regions. We can compare this metric to the actual gene expression using the RNA data sampled at E16.5.
+## Gene Activity Scores
+
+Gene activity scores are calculated using the GeneActivity() function from the Signac package. This score is a result of computing the counts per cell in the gene body and promoter regions. Assuming that open chromatin implies transcription, this score imputes gene expression from the accessibility of the gene's regulatory regions. We can compare this metric to the actual gene expression using the RNA data sampled at E16.5.
 
 ```{r, include=FALSE}
 gene.activities <- GeneActivity(E18_seurat)
