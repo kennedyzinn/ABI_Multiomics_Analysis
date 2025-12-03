@@ -357,7 +357,7 @@ sup_unique
 ```{r}
 
 library(dplyr)
-
+npc_combined <- subset(combined, subset = cell_type == "NPCs")
 plot_gene_by_time <- function(seurat_obj, gene, time_col = "orig.ident") {
   
   df <- FetchData(seurat_obj, vars = c(gene, time_col)) %>%
@@ -376,25 +376,80 @@ plot_gene_by_time <- function(seurat_obj, gene, time_col = "orig.ident") {
 }
 ```
 
+```{r}
+library(dplyr)
+npc_combined <- subset(combined, subset = cell_type == "NPCs")
+```
+
+```{r}
+plot_gene_by_time <- function(seurat_obj, gene, time_col = "orig.ident") {
+  
+  # Fetch raw data for boxplots
+  df_raw <- FetchData(seurat_obj, vars = c(gene, time_col))
+  
+  # Calculate means for the line plot
+  df_summary <- df_raw %>%
+    group_by(.data[[time_col]]) %>%
+    summarise(avg_expr = mean(.data[[gene]]), .groups = "drop")
+  
+  # Create plot with boxplot
+  ggplot(df_raw, aes(x = .data[[time_col]], y = .data[[gene]])) +
+    geom_boxplot(fill = "lightblue", alpha = 0.7) +
+    geom_jitter(width = 0.2, alpha = 0.3, size = 0.5, color = "gray40") +  # Optional: show individual points
+    geom_line(data = df_summary, aes_string(x = time_col, y = "avg_expr", group = 1),
+              size = 1, color = "steelblue") +
+    geom_point(data = df_summary, aes_string(x = time_col, y = "avg_expr"),
+               size = 3, color = "darkblue") +
+    labs(
+      title = paste("Expression of", gene, "across time points"),
+      x = "Time point",
+      y = "Expression"
+    ) +
+    theme_bw()
+}
+```
+
+The plots of each gene's profile across development uses normalized expression data.
+
 Xist is exclusively expressed on the inactive X chromosome and is essential for X-inactivation (NIH). This gene was the most differentially expressed in both groups, as its expression changed dramatically from E12.5 to E14.5.
 
 ```{r}
 # plot Xist expression across neurogenesis
-plot_gene_by_time(combined, "Xist")
+plot_gene_by_time(npc_combined, "Xist")
 ```
 
-Kcnn2 enables small conductance calcium-activate potassium channel activity. It is used for modulating chemical synaptic transmission and is active in glutamatergic synapses and postsynaptic membrane (NIH). This gene was a unique top DEG in early neurogensis. However, but unsurprisingly, the plot shows that expression increases throughout neurogenesis, peaking at E14.5 and leveling out after; the most significant increase in expression was detected in the early phases, from E11.5 to E12.5.
+The UMAP below represents Xist expression in each NPC. Overall there appears to be consistent Xist expression here. Fewer cells appear expressed on the left hand side of the UMAP.
 
 ```{r}
-plot_gene_by_time(combined, "Kcnn2")
+FeaturePlot(npc_combined, features = "Xist") +
+  ggtitle("Xist Expression in NPCs from E11.5 to E16.5")
 ```
 
-Hbb-bs is a top unique DEG in the later phases of neurogenesis. Hbb-bs code for a polyeptide chain found in hemoglobin and is involved in transporting oxygen to peripheral tissues. Peaking in expression at E12.5 and dropping by E13.5, Hbb-bs expression gradually increases linearly from E13.5 to E16.5. Literature suggests that neuronal hemoglobin expression in mature neurons may play a role in neuronal epigenetics, metabolism and function (Brown et al., 2016, Richter et al., 2009).
 
-Although expression peaks at E12.5, the bar graphs and volcano plots show that many genes increased expression dramatically; it may be that the increased expression of Hbb-bs on E12.5 was not dramatic relative to other genes at that time point.
+Kcnn2 enables small conductance calcium-activate potassium channel activity. It is used for modulating chemical synaptic transmission and is active in glutamatergic synapses and postsynaptic membrane (NIH). This gene was a unique top DEG in early neurogensis. However, but unsurprisingly, the plot shows that expression increases throughout neurogenesis, peaking at E14.5 and leveling out after; the most significant increase in expression was detected in the early phases, from E11.5 to E12.5. Most NPCs did not express Kcnn2; hence the absence of boxplots here.
 
 ```{r}
-plot_gene_by_time(combined, "Hbb-bs")
+plot_gene_by_time(npc_combined, "Kcnn2")
+```
+The UMAP below represents the expression levels of Kcnn2 for each NPC across all time points. As suspected by the lack of boxplots, most NPCs do not express Kcnn2. Expression seems particularly sparse on the left hand side of the UMAP. Later on in the report, we can observe the different classes of NPCs present here. There appears to be a higher concentration of Kcnn2 expression where GABA-ergic NPCs and glutamatergic NPCs overlap.
+
+```{r}
+FeaturePlot(npc_combined, "Kcnn2") +
+  ggtitle("Kcnn2 Expression in NPCs from E11.5 to E16.5")
+```
+
+Hbb-bs is a top unique DEG in the later phases of neurogenesis. Hbb-bs code for a polyeptide chain found in hemoglobin and is involved in transporting oxygen to peripheral tissues. Peaking in expression at E12.5 and dropping by E13.5, Hbb-bs expression gradually increases from E13.5 to E16.5. Literature suggests that neuronal hemoglobin expression in mature neurons may play a role in neuronal epigenetics, metabolism and function (Brown et al., 2016, Richter et al., 2009). Similar to Kcnn2, many NPCs did not express Hbb-bs.
+
+
+```{r}
+plot_gene_by_time(npc_combined, "Hbb-bs")
+```
+
+Hbb-bs expression seems mostly evenly distributed across the UMAP, aside from fewer expressed cells on the left-hand side. The small cluster in the center demonstrates substaintially greater levels of Hbb-bs expression than in other clusters, which may suggest why this cluster is distinct from the rest of the samples.
+
+```{r}
+FeaturePlot(npc_combined, "Hbb-bs") +
+  ggtitle("Hbb-bs Expression in NPCs from E11.5 to E16.5")
 ```
 
 The analysis of the scRNA-seq data here is preliminary at best; further analysis could include identifying markers unique to each time point, exploring which genes are continually changing throughout cortical neurogenesis (ie shared DEGs across time points), Gene Set Analysis (GSEA) to summarize the DEGs identified here, and a Weighted Gene Co-Expression Network Analysis (WGCNA), to identify the gene networks involved here and identify genes that act as key drivers during development.
@@ -402,6 +457,8 @@ The analysis of the scRNA-seq data here is preliminary at best; further analysis
 # ATAC-Seq; Multiomics Integration
 
 Full scATAC-seq data from only E18.5 was readily available for analysis. Here, I compare the open chromatin regions at E18.5 to gene expression at E16.5, with the goal of identifying genes which may regulate chromatin accessibility of marker genes on the genome. Considering the temporal difference in the datasets, associated chromatin regions are considered to be latent responses associated with gene expression.
+
+The raw data of the ATAC-seq data consists of two files; the peaks file and the fragments file. The fragment file is a matrix of five columns; the first three columns are the genomic locations (chromosome, start position and end position), the fourth column is the cell ID and the fifth column is the total number of reads from that cell that are associated with that fragment. The peaks file is a sparse feature by cell matrix where the rows are peaks and the columns are the cells. Each element within this sparse matrix is a  that cell within that locus.
 
 ```{r, include=FALSE}
 library(Signac)
@@ -449,12 +506,14 @@ E18_seurat <- FindNeighbors(E18_seurat, reduction = "lsi", dims = 2:30)
 E18_seurat <- FindClusters(E18_seurat, resolution = 0.1, algorithm = 3)
 ```
 
-Pre-processing of single cell ATAC-seq data followed a standard workflow. After standardizing, I completed cluster analysis using UMAP and KNN.
+Pre-processing of single cell ATAC-seq data followed a standard workflow. After standardizing, I completed cluster analysis using UMAP and KNN. 
 
 ```{r}
 # visualize
 DimPlot(E18_seurat, reduction = "umap", label = F) + labs(title = "Clusters of ATAC-seq Data")
 ```
+
+Gene activity scores are calculated using the GeneActivity() function from the Signac package. This score represents the counts per cell in the gene body and promoter regions. Assuming that open chromatin implies transcription, this score imputes gene expression from the accessibility of the gene's regulatory regions. We can compare this metric to the actual gene expression using the RNA data sampled at E16.5.
 
 ```{r, include=FALSE}
 gene.activities <- GeneActivity(E18_seurat)
